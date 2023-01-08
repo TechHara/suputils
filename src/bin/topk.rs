@@ -1,7 +1,8 @@
-use std::cmp::{Ordering, Reverse};
+use float_ord::FloatOrd;
+use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 
 use clap::Parser;
 
@@ -57,7 +58,7 @@ it compares by lexicographic order of byte-values.
 ")]
 struct Arguments {
     /// Field delimiter character
-    #[arg(short, default_value_t = '\t')]
+    #[arg(short = 't', default_value_t = '\t')]
     field_delim: char,
     /// Compare by the given field
     #[arg(short = 'k', default_value_t = 1)]
@@ -74,6 +75,8 @@ struct Arguments {
     /// reverse compare operation, i.e., bottom-k
     #[arg(short, default_value_t = false)]
     reverse: bool,
+    /// number of element k
+    k: usize,
     /// Input file; If omitted, read from stdin
     input: Option<String>,
 }
@@ -87,9 +90,11 @@ enum CompareType {
 
 struct ProgramOption {
     compare_type: CompareType,
-    input_file: String,
     field_delim: String,
+    compare_idx: usize, // 0-index
     reverse: bool,
+    k: usize,
+    input_file: String,
 }
 
 trait SelectK<T: Ord> {
@@ -224,12 +229,98 @@ fn parse_arguments() -> Result<ProgramOption, String> {
         }
     };
 
+    if args.compare_field == 0 {
+        return Err("compare field must be 1 or greater".to_owned());
+    }
+
     Ok(ProgramOption {
-        compare_type: compare_type,
-        input_file: input_file,
+        compare_type,
+        input_file,
+        compare_idx: args.compare_field - 1, // 0-index
         field_delim: args.field_delim.to_string(),
         reverse: args.reverse,
+        k: args.k,
     })
+}
+
+fn byte_parser(token: &str) -> String {
+    token.to_owned()
+}
+
+fn char_parser(token: &str) -> Vec<char> {
+    token.chars().collect()
+}
+
+fn int64_parser(token: &str) -> i64 {
+    token
+        .parse()
+        .unwrap_or_else(|_| panic!("cannot parse {} into i64", token))
+}
+
+fn float64_parser(token: &str) -> FloatOrd<f64> {
+    FloatOrd(
+        token
+            .parse()
+            .unwrap_or_else(|_| panic!("cannot parse {} into f64", token)),
+    )
+}
+
+fn delegate<T: Ord>(
+    ifs: impl BufRead,
+    ofs: impl Write,
+    program_option: ProgramOption,
+    parser: fn(&str) -> T,
+) -> Result<(), String> {
+    match program_option.reverse {
+        false => run(
+            ifs,
+            ofs,
+            program_option.field_delim,
+            program_option.compare_idx,
+            parser,
+            TopK::<(T, String)>::new(program_option.k),
+        ),
+        true => run(
+            ifs,
+            ofs,
+            program_option.field_delim,
+            program_option.compare_idx,
+            parser,
+            BottomK::<(T, String)>::new(program_option.k),
+        ),
+    }
+}
+
+fn run<T: Ord>(
+    ifs: impl BufRead,
+    mut ofs: impl Write,
+    delim: String,
+    compare_idx: usize,
+    parser: fn(&str) -> T,
+    mut container: impl SelectK<(T, String)>,
+) -> Result<(), String> {
+    for (linenum, line) in ifs.lines().enumerate() {
+        let line = line.expect("failed to read");
+        let token = line.split(&delim).nth(compare_idx);
+        let token = match token {
+            Some(x) => x,
+            None => {
+                eprintln!(
+                    "{}: col {} does not exit; skipping",
+                    linenum + 1,
+                    compare_idx + 1
+                );
+                continue;
+            }
+        };
+        container.push((parser(token), line));
+    }
+
+    for (_, line) in container.into_vector().into_iter() {
+        writeln!(ofs, "{}", line).expect("failed writing out")
+    }
+
+    Ok(())
 }
 
 fn main() {
@@ -243,7 +334,21 @@ fn main() {
 
     let output_file = "/dev/stdout".to_owned();
 
-    let ifs =
-        BufReader::new(File::open(program_option.input_file).expect("Error reading input file"));
+    let ifs = BufReader::new(
+        File::open(program_option.input_file.clone()).expect("Error reading input file"),
+    );
     let ofs = BufWriter::new(File::create(output_file).expect("Error writing to stdout"));
+
+    if program_option.k == 0 {
+        return; // done
+    }
+
+    if let Err(ref msg) = match program_option.compare_type {
+        CompareType::Byte => delegate(ifs, ofs, program_option, byte_parser),
+        CompareType::Char => delegate(ifs, ofs, program_option, char_parser),
+        CompareType::Int64 => delegate(ifs, ofs, program_option, int64_parser),
+        CompareType::Float64 => delegate(ifs, ofs, program_option, float64_parser),
+    } {
+        eprintln!("{}", msg);
+    }
 }
