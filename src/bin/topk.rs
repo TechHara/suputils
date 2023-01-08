@@ -243,33 +243,33 @@ fn parse_arguments() -> Result<ProgramOption, String> {
     })
 }
 
-fn byte_parser(token: &str) -> String {
-    token.to_owned()
+fn byte_parser(token: &str) -> Result<String, String> {
+    Ok(token.to_owned())
 }
 
-fn char_parser(token: &str) -> Vec<char> {
-    token.chars().collect()
+fn char_parser(token: &str) -> Result<Vec<char>, String> {
+    Ok(token.chars().collect())
 }
 
-fn int64_parser(token: &str) -> i64 {
-    token
-        .parse()
-        .unwrap_or_else(|_| panic!("cannot parse {} into i64", token))
+fn int64_parser(token: &str) -> Result<i64, String> {
+    match token.parse() {
+        Ok(x) => Ok(x),
+        _ => Err(format!("cannot parse `{}` into i64", token)),
+    }
 }
 
-fn float64_parser(token: &str) -> FloatOrd<f64> {
-    FloatOrd(
-        token
-            .parse()
-            .unwrap_or_else(|_| panic!("cannot parse {} into f64", token)),
-    )
+fn float64_parser(token: &str) -> Result<FloatOrd<f64>, String> {
+    match token.parse() {
+        Ok(x) => Ok(FloatOrd(x)),
+        _ => Err(format!("cannot parse `{}` into f64", token)),
+    }
 }
 
 fn delegate<T: Ord>(
     ifs: impl BufRead,
     ofs: impl Write,
     program_option: ProgramOption,
-    parser: fn(&str) -> T,
+    parser: fn(&str) -> Result<T, String>,
 ) -> Result<(), String> {
     match program_option.reverse {
         false => run(
@@ -296,7 +296,7 @@ fn run<T: Ord>(
     mut ofs: impl Write,
     delim: String,
     compare_idx: usize,
-    parser: fn(&str) -> T,
+    parser: fn(&str) -> Result<T, String>,
     mut container: impl SelectK<(T, String)>,
 ) -> Result<(), String> {
     for (linenum, line) in ifs.lines().enumerate() {
@@ -313,7 +313,14 @@ fn run<T: Ord>(
                 continue;
             }
         };
-        container.push((parser(token), line));
+        let val = match parser(token) {
+            Ok(x) => x,
+            Err(ref msg) => {
+                eprintln!("{}: {}; skipping", linenum + 1, msg);
+                continue;
+            }
+        };
+        container.push((val, line));
     }
 
     for (_, line) in container.into_vector().into_iter() {
