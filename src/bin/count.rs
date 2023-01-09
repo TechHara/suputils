@@ -1,6 +1,4 @@
-use float_ord::FloatOrd;
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
@@ -55,7 +53,7 @@ fn parse_arguments() -> Result<ProgramOption, String> {
     Ok(ProgramOption {
         delim: args.delimiter.to_string(),
         suppress: args.suppress,
-        input_file: input_file,
+        input_file,
     })
 }
 
@@ -65,9 +63,11 @@ fn run(
     program_option: ProgramOption,
 ) -> Result<(), String> {
     let mut map = HashMap::<String, usize>::new();
-    for (linenum, line) in ifs.lines().enumerate() {
+    for (_, line) in ifs.lines().enumerate() {
         let line = line.expect("failed to read");
-        if program_option.suppress && line.is_empty() { continue; }
+        if program_option.suppress && line.is_empty() {
+            continue;
+        }
         *map.entry(line).or_default() += 1;
     }
     map.into_iter().for_each(|(line, count)| {

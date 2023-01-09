@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.0.26", features = ["derive"] }
 float-ord = "0.3.2"
+memmap = "0.7"
