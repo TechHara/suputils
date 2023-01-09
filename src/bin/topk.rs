@@ -10,51 +10,48 @@ use clap::Parser;
 #[command(name = "topk")]
 #[command(author = "TechHara")]
 #[command(version = "0.1.0")]
-#[command(about = "Print only top-k records. By default,
-it compares by lexicographic order of byte-values.
+#[command(about = "Print only top-k records. Space complexity is O(k)
+whereas `sort | head` space complexity is O(n).
+By default, the output is not sorted.
 
-    Example 1a -- by default convert to float
-    1	a
-    2	b
-    1	c
-    1	a
-
-    $ group input
-    1	a
-    2	b
-    1	c,a
-
-    Example 1b -- need to sort the input to produce unique groups
-    $ sort input | group
-    1	a,a,c
-    2	b
-
-    Example 1c -- two different ways to obtain unique members for each group
-    $ sort -u input | group
-    1	a,c
-    2	b
-
-    $ sort input | group -u
-    1	a,c
-    2	b
-
-
-    Example 2a -- inverse operation, i.e., un-group
     $ cat input
-    1	c,a,c
-    2	b
-    
-    $ group -i input
-    1	c
-    1	a
-    1	c
-    2	b
+    1	one
+    9	nine
+    11	eleven
+    0	zero
+    5	five
+    7	seven
+    9	nine
 
-    Example 2b -- apply unique
-    $ group -i -u input
-    1	a
-    1	c
-    2	b
+    # By default compares 1st column by lexicographical byte-values
+    $ topk 3 input
+    7	seven
+    9	nine
+    9	nine
+
+    # set `-i` flag to parse the value as int64
+    $ topk -i 3 input
+    9	nine
+    11	eleven
+    9	nine
+
+    # set `-s` flag to sort the output
+    $ topk -is 3 input
+    11	eleven
+    9	nine
+    9	nine
+
+    # set `-r` flag to reverse comparison, i.e., bottom-k
+    $ topk -irs 3 input
+    0	zero
+    1	one
+    5	five
+
+    # provide column index to sort by with `-k` flag
+    $ topk -k2 3 input
+    1	one
+    0	zero
+    7	seven
 ")]
 struct Arguments {
     /// Field delimiter character
@@ -75,6 +72,9 @@ struct Arguments {
     /// reverse compare operation, i.e., bottom-k
     #[arg(short, default_value_t = false)]
     reverse: bool,
+    /// sort the result
+    #[arg(short, default_value_t = false)]
+    sort: bool,
     /// number of element k
     k: usize,
     /// Input file; If omitted, read from stdin
@@ -93,6 +93,7 @@ struct ProgramOption {
     field_delim: String,
     compare_idx: usize, // 0-index
     reverse: bool,
+    sort: bool,
     k: usize,
     input_file: String,
 }
@@ -100,6 +101,7 @@ struct ProgramOption {
 trait SelectK<T: Ord> {
     fn push(&mut self, data: T);
     fn into_vector(self) -> Vec<T>;
+    fn into_sorted_vector(self) -> Vec<T>;
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool;
 }
@@ -132,6 +134,15 @@ impl<T: Ord> SelectK<T> for BottomK<T> {
 
     fn into_vector(self) -> Vec<T> {
         self.heap.into_vec()
+    }
+
+    fn into_sorted_vector(mut self) -> Vec<T> {
+        let mut result = Vec::with_capacity(self.len());
+        while !self.heap.is_empty() {
+            result.push(self.heap.pop().unwrap());
+        }
+        result.reverse();
+        result
     }
 
     fn len(&self) -> usize {
@@ -171,6 +182,16 @@ impl<T: Ord> SelectK<T> for TopK<T> {
 
     fn into_vector(self) -> Vec<T> {
         self.heap.into_iter().map(|r| r.0).collect()
+    }
+
+    fn into_sorted_vector(mut self) -> Vec<T> {
+        let mut result = Vec::with_capacity(self.len());
+        while !self.heap.is_empty() {
+            result.push(self.heap.pop().unwrap().0);
+        }
+
+        result.reverse();
+        result
     }
 
     fn len(&self) -> usize {
@@ -240,6 +261,7 @@ fn parse_arguments() -> Result<ProgramOption, String> {
         field_delim: args.field_delim.to_string(),
         reverse: args.reverse,
         k: args.k,
+        sort: args.sort,
     })
 }
 
@@ -277,6 +299,7 @@ fn delegate<T: Ord>(
             ofs,
             program_option.field_delim,
             program_option.compare_idx,
+            program_option.sort,
             parser,
             TopK::<(T, String)>::new(program_option.k),
         ),
@@ -285,6 +308,7 @@ fn delegate<T: Ord>(
             ofs,
             program_option.field_delim,
             program_option.compare_idx,
+            program_option.sort,
             parser,
             BottomK::<(T, String)>::new(program_option.k),
         ),
@@ -296,6 +320,7 @@ fn run<T: Ord>(
     mut ofs: impl Write,
     delim: String,
     compare_idx: usize,
+    sort: bool,
     parser: fn(&str) -> Result<T, String>,
     mut container: impl SelectK<(T, String)>,
 ) -> Result<(), String> {
@@ -323,8 +348,17 @@ fn run<T: Ord>(
         container.push((val, line));
     }
 
-    for (_, line) in container.into_vector().into_iter() {
-        writeln!(ofs, "{}", line).expect("failed writing out")
+    match sort {
+        false => {
+            for (_, line) in container.into_vector().into_iter() {
+                writeln!(ofs, "{}", line).expect("failed writing out")
+            }
+        }
+        true => {
+            for (_, line) in container.into_sorted_vector().into_iter() {
+                writeln!(ofs, "{}", line).expect("failed writing out")
+            }
+        }
     }
 
     Ok(())

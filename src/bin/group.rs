@@ -11,24 +11,25 @@ use clap::Parser;
     about = "Group (first field, second field) of each line by the first field in the order it reads.
 Can also perform the inverse of it.
 
-    Example 1a -- unsorted input may produce multiple groups of the same key
+    # group
     $ cat input
     1	a
     2	b
     1	c
     1	a
 
+    # unsorted input may produce multiple groups of the same key
     $ group input
     1	a
     2	b
     1	c,a
 
-    Example 1b -- need to sort the input to produce unique groups
+    # need to sort the input to produce unique groups
     $ sort input | group
     1	a,a,c
     2	b
 
-    Example 1c -- two different ways to obtain unique members for each group
+    # two different ways to obtain unique members for each group
     $ sort -u input | group
     1	a,c
     2	b
@@ -38,18 +39,19 @@ Can also perform the inverse of it.
     2	b
 
 
-    Example 2a -- inverse operation, i.e., un-group
+    # ungroup
     $ cat input
     1	c,a,c
     2	b
     
+    # set `-i` for inverse operation, i.e., un-group
     $ group -i input
     1	c
     1	a
     1	c
     2	b
 
-    Example 2b -- apply unique
+    # apply unique
     $ group -i -u input
     1	a
     1	c
