@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
@@ -8,47 +9,47 @@ use clap::Parser;
 #[command(author = "TechHara")]
 #[command(version = "0.1.0")]
 #[command(
-    about = "Group (first field, second field) of each line by the first field in the order it reads.
-Can also perform the inverse of it.
+    about = "Group (first field, second field) of each line by the first field.
+By default, it assumes the input is sorted by the first field.
 
-    # group
+    # sorted input
     $ cat input
     1	a
-    2	b
     1	c
     1	a
+    2	b
 
-    # unsorted input may produce multiple groups of the same key
     $ group input
-    1	a
-    2	b
-    1	c,a
-
-    # need to sort the input to produce unique groups
-    $ sort input | group
-    1	a,a,c
+    1	a,c,a
     2	b
 
-    # two different ways to obtain unique members for each group
-    $ sort -u input | group
+    # set `-u` key to produce unique elements
+    $ group -u input
     1	a,c
     2	b
 
-    $ sort input | group -u
-    1	a,c
-    2	b
+    # unsorted input
+    $ cat input
+    1   a
+    2   b
+    1   c
+    1   a
 
+    # set `-m` flag for unsorted input -- requires more time & memory complexity
+    $ group -m input
+    1   a,c,a
+    2   b
 
     # ungroup
     $ cat input
-    1	c,a,c
+    1	a,c,a
     2	b
     
     # set `-i` for inverse operation, i.e., un-group
     $ group -i input
-    1	c
     1	a
     1	c
+    1	a
     2	b
 
     # apply unique
@@ -71,8 +72,42 @@ struct Arguments {
     /// apply unique tokens after grouping / before un-grouping
     #[arg(short, default_value_t = false)]
     unique: bool,
+    /// for unsorted input, use hashmap (larger time & space complexity)
+    #[arg(short = 'm', default_value_t = false)]
+    hashmap: bool,
     /// Input file; If omitted, read from stdin
     input: Option<String>,
+}
+
+fn group_hashmap<R: BufRead, W: Write>(
+    ifs: R,
+    mut ofs: W,
+    field_delim: &str,
+    token_delim: &str,
+    unique: bool,
+) -> io::Result<()> {
+    let mut map = HashMap::<String, Vec<String>>::new();
+
+    for line in ifs.lines() {
+        let line = line?;
+        let fields: Vec<&str> = line.split(field_delim).take(2).collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        map.entry(fields[0].to_owned())
+            .or_default()
+            .push(fields[1].to_owned());
+    }
+
+    for (key, mut tokens) in map.into_iter() {
+        if unique {
+            tokens.sort();
+            tokens.dedup();
+        }
+        writeln!(ofs, "{}\t{}", &key, tokens.join(token_delim))?;
+    }
+
+    Ok(())
 }
 
 fn group<R: BufRead, W: Write>(
@@ -87,7 +122,7 @@ fn group<R: BufRead, W: Write>(
 
     for line in ifs.lines() {
         let line = line?;
-        let fields: Vec<&str> = line.split(field_delim).collect();
+        let fields: Vec<&str> = line.split(field_delim).take(2).collect();
         if fields.len() < 2 {
             continue;
         }
@@ -117,7 +152,7 @@ fn ungroup<R: BufRead, W: Write>(
 ) -> io::Result<()> {
     for line in ifs.lines() {
         let line = line?;
-        let fields: Vec<&str> = line.split(field_delim).collect();
+        let fields: Vec<&str> = line.split(field_delim).take(2).collect();
         if fields.len() < 2 {
             continue;
         }
@@ -153,13 +188,22 @@ fn main() -> io::Result<()> {
     let ofs = BufWriter::new(File::create(output_file)?);
 
     match args.inverse {
-        false => group(
-            ifs,
-            ofs,
-            &args.field_delim.to_string(),
-            &args.token_delim.to_string(),
-            args.unique,
-        ),
+        false => match args.hashmap {
+            false => group(
+                ifs,
+                ofs,
+                &args.field_delim.to_string(),
+                &args.token_delim.to_string(),
+                args.unique,
+            ),
+            true => group_hashmap(
+                ifs,
+                ofs,
+                &args.field_delim.to_string(),
+                &args.token_delim.to_string(),
+                args.unique,
+            ),
+        },
         true => ungroup(
             ifs,
             ofs,
