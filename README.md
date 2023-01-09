@@ -132,3 +132,34 @@ Options:
   -h, --help              Print help information
   -V, --version           Print version information
   ```
+
+  ### count
+  ```
+  Count occurrence of each line. Input does not need to be sorted.
+
+    $ cat input
+    three
+    one
+    two
+    three
+    two
+    three
+
+    # prints the count followed by the line
+    $ count input
+    3	three
+    1	one
+    2	two
+
+
+Usage: count [OPTIONS] [INPUT]
+
+Arguments:
+  [INPUT]  Input file; If omitted, read from stdin
+
+Options:
+  -d <DELIMITER>      output delimiter [default: "\t"]
+  -s                  suppress empty line
+  -h, --help          Print help information
+  -V, --version       Print version information
+```
