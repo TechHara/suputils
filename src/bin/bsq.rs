@@ -1,4 +1,5 @@
 use memmap::MmapOptions;
+use std::cmp::Ordering;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
@@ -50,14 +51,18 @@ struct Arguments {
     query: Option<String>,
 }
 
+enum MatchType {
+    ExactMatch,
+    PrefixMatch,
+}
+
 struct ProgramOption {
     delim: u8,
-    exact_match: bool,
-    key_index: usize, // 0-index
+    match_type: MatchType,
+    key_idx: usize, // 0-index
     database: String,
     query: Option<String>,
 }
-
 
 fn parse_arguments() -> Result<ProgramOption, String> {
     let args = Arguments::parse();
@@ -66,30 +71,33 @@ fn parse_arguments() -> Result<ProgramOption, String> {
     }
 
     Ok(ProgramOption {
-        key_index: args.index_field - 1, // 0-index
-        exact_match: args.exact_match,
+        key_idx: args.index_field - 1, // 0-index
+        match_type: match args.exact_match {
+            true => MatchType::ExactMatch,
+            false => MatchType::PrefixMatch,
+        },
         database: args.database,
         query: args.query,
         delim: args.delimiter.to_string().as_bytes()[0],
     })
 }
 
+// if n == 0, returns None
+// else calls position n time and returns the final value
 fn nth_pos<T>(mut it: impl Iterator<Item = T>, item: T, n: usize) -> Option<usize>
 where
     T: std::cmp::PartialEq,
 {
-    if n > 0 {
-        for _ in [0..n-1] {
-            if it.position(|x| x == item).is_none() {
-                return None;
-            }
-        }
+    let mut result = 0;
+    for _ in 0..n {
+        result += it.position(|x| x == item)?;
     }
 
-    it.position(|x| x == item)
+    Some(result + n - 1)
 }
 
-fn query(key: &str, database: &[u8], delim: u8, key_idx: usize, exact_match: bool) -> Option<(usize, usize)> {
+// find the first position where the match can be inserted into
+fn lower_bound(key: &str, database: &[u8], delim: u8, key_idx: usize) -> usize {
     let mut lb = 0usize;
     let mut ub = database.len();
     loop {
@@ -102,12 +110,14 @@ fn query(key: &str, database: &[u8], delim: u8, key_idx: usize, exact_match: boo
             Some(pos) => start + pos,
             None => ub,
         };
+
+        eprintln!("{}", std::str::from_utf8(&database[start..end]).expect(""));
         let key_start = match key_idx {
             0 => start,
-            _ => match nth_pos(database[start..end].iter(), &delim, key_idx - 1) {
-            Some(pos) => start + pos + 1,
-            None => end,
-            }
+            _ => match nth_pos(database[start..end].iter(), &delim, key_idx) {
+                Some(pos) => start + pos + 1,
+                None => end,
+            },
         };
 
         let key_end = match database[key_start..end].iter().position(|&x| x == delim) {
@@ -115,44 +125,121 @@ fn query(key: &str, database: &[u8], delim: u8, key_idx: usize, exact_match: boo
             None => end,
         };
 
-        match &database[key_start..key_end].cmp(key.as_bytes()) {
-            std::cmp::Ordering::Less => {
-                lb = end + 1;
-            }
-            std::cmp::Ordering::Equal => {
-                return Some((start, end));
-            }
-            std::cmp::Ordering::Greater => {
-                ub = start - 1;
+        eprintln!(
+            "{}\t{}",
+            key,
+            std::str::from_utf8(&database[key_start..key_end]).unwrap()
+        );
+        match key.as_bytes().cmp(&database[key_start..key_end]) {
+            Ordering::Less | Ordering::Equal => match start {
+                0 => {
+                    return 0;
+                }
+                _ => {
+                    ub = start - 1;
+                }
+            },
+            Ordering::Greater => {
+                lb = end;
             }
         }
 
         if lb >= ub {
-            return None;
+            return ub + 1;
         }
     }
 }
 
 #[test]
-fn test_query() {
+fn test_lower_bound1() {
     let delim = b' ';
     let database = "a\nab\nabc\nabcd\nabe".as_bytes();
-    assert_eq!(query("a", database, delim, 0, true), Some((0, 1)));
-    assert_eq!(query("ab", database, delim, 0, true), Some((2, 4)));
-    assert_eq!(query("abc", database, delim, 0, true), Some((5, 8)));
-    assert_eq!(query("abcd", database, delim, 0, true), Some((9, 13)));
-    assert_eq!(query("abe", database, delim, 0, true), Some((14, 17)));
+    assert_eq!(lower_bound("a", database, delim, 0), 0);
+    assert_eq!(lower_bound("ab", database, delim, 0), 2);
+    assert_eq!(lower_bound("abc", database, delim, 0), 5);
+    assert_eq!(lower_bound("abcd", database, delim, 0), 9);
+    assert_eq!(lower_bound("abe", database, delim, 0), 14);
 }
 
 #[test]
-fn test_query2() {
+fn test_lower_bound2() {
     let delim = b' ';
     let database = "0 a\n1 ab\n2 abc\n3 abcd\n4 abe".as_bytes();
-    assert_eq!(query("a", database, delim, 1, true), Some((0, 3)));
-    assert_eq!(query("ab", database, delim, 1, true), Some((4, 8)));
-    assert_eq!(query("abc", database, delim, 1, true), Some((9, 14)));
-    assert_eq!(query("abcd", database, delim, 1, true), Some((15, 21)));
-    assert_eq!(query("abe", database, delim, 1, true), Some((22, 27)));
+    assert_eq!(lower_bound("a", database, delim, 1), 0);
+    assert_eq!(lower_bound("ab", database, delim, 1), 4);
+    assert_eq!(lower_bound("abc", database, delim, 1), 9);
+    assert_eq!(lower_bound("abcd", database, delim, 1), 15);
+    assert_eq!(lower_bound("abe", database, delim, 1), 22);
+}
+
+#[test]
+fn test_lower_bound3() {
+    let delim = b' ';
+    let database = "0 x a\n1 y ab\n2 z abc\n3 w abcd\n4 u abe".as_bytes();
+    assert_eq!(lower_bound("a", database, delim, 2), 0);
+    assert_eq!(lower_bound("ab", database, delim, 2), 6);
+    assert_eq!(lower_bound("abc", database, delim, 2), 13);
+    assert_eq!(lower_bound("abcd", database, delim, 2), 21);
+    assert_eq!(lower_bound("abe", database, delim, 2), 30);
+}
+
+fn get_match_range(
+    database: &[u8],
+    start: usize,
+    query: &[u8],
+    key_idx: usize,
+    delim: u8,
+    match_type: &MatchType,
+) -> Option<(usize, usize)> {
+    let end = database.len();
+    let key_start = match key_idx {
+        0 => start,
+        _ => match nth_pos(database[start..end].iter(), &delim, key_idx) {
+            Some(pos) => start + pos + 1,
+            None => {
+                return None;
+            }
+        },
+    };
+    let key_end = match database[key_start..end].iter().position(|&x| x == delim) {
+        Some(pos) => key_start + pos,
+        None => end,
+    };
+    let is_match = match match_type {
+        MatchType::ExactMatch => query.cmp(&database[key_start..key_end]) == Ordering::Equal,
+        MatchType::PrefixMatch => database[key_start..key_end].starts_with(query),
+    };
+
+    if !is_match {
+        return None;
+    }
+    let end = match database[key_end + 1..].iter().position(|&x| x == b'\n') {
+        Some(pos) => key_end + pos + 2,
+        None => end,
+    };
+
+    Some((start, end))
+}
+
+fn print_matches(
+    ofs: &mut BufWriter<File>,
+    database: &[u8],
+    start: usize,
+    query: &[u8],
+    key_idx: usize,
+    delim: u8,
+    match_type: &MatchType,
+) {
+    let mut first = start;
+    let mut last = None;
+    while let Some((_, end)) = get_match_range(database, first, query, key_idx, delim, match_type) {
+        first = end;
+        last = Some(end);
+    }
+    if let Some(end) = last {
+        ofs.write_all(&database[start..end])
+            .expect("error writing out");
+    }
 }
 
 fn main() {
@@ -174,17 +261,20 @@ fn main() {
     };
 
     let output_file = "/dev/stdout".to_owned();
-    let ofs = BufWriter::new(File::create(output_file).expect("Error writing to stdout"));
+    let mut ofs = BufWriter::new(File::create(output_file).expect("Error writing to stdout"));
 
     match program_option.query {
         Some(ref q) => {
-            query(
-                q,
+            let start = lower_bound(q, &mmap, program_option.delim, program_option.key_idx);
+            print_matches(
+                &mut ofs,
                 &mmap,
+                start,
+                q.as_bytes(),
+                program_option.key_idx,
                 program_option.delim,
-                program_option.key_index,
-                program_option.exact_match,
-            );
+                &program_option.match_type,
+            )
         }
         None => {
             let ifs = BufReader::new(
@@ -192,12 +282,15 @@ fn main() {
             );
             ifs.lines().for_each(|line| {
                 let line = line.expect("cannot read from stdin");
-                query(
-                    &line,
+                let start = lower_bound(&line, &mmap, program_option.delim, program_option.key_idx);
+                print_matches(
+                    &mut ofs,
                     &mmap,
+                    start,
+                    line.as_bytes(),
+                    program_option.key_idx,
                     program_option.delim,
-                    program_option.key_index,
-                    program_option.exact_match,
+                    &program_option.match_type,
                 );
             });
         }
